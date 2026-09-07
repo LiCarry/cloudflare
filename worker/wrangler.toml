@@ -1,0 +1,41 @@
+# Cloudflare Worker — Part 3 of the ASE take-home assessment.
+#
+# Endpoints:
+#   GET /               index
+#   GET /secure         identity of the Access-authenticated user (HTML)
+#   GET /flags/:CC      country flag served from a *private* R2 bucket (image/svg+xml)
+#   GET /flags-d1/:CC   country flag served from D1 (image/svg+xml)
+#
+# Before deploying:
+#   1. `npx wrangler r2 bucket create ase-flags` and set bucket_name below.
+#   2. `npx wrangler d1 create ase-flags-db` and paste database_id below.
+#   3. Set ACCESS_TEAM_DOMAIN / ACCESS_AUD from your Zero Trust dashboard
+#      (team domain under Zero Trust > Settings > Custom Pages; AUD tag on the
+#      Access application that protects /secure).
+#   4. Optional: add routes for your own zone, e.g.
+#        routes = [
+#          { pattern = "yourdomain.com/secure*", custom_domain = false },
+#          { pattern = "yourdomain.com/flags/*", custom_domain = false },
+#          { pattern = "yourdomain.com/flags-d1/*", custom_domain = false },
+#        ]
+#      (the DNS record for yourdomain.com must exist and be proxied)
+
+name = "ase-assessment-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "FLAGS"
+bucket_name = "ase-flags"
+
+[[d1_databases]]
+binding = "FLAGS_DB"
+database_name = "ase-flags-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+# Zero Trust team domain (Settings > Custom Pages > Team Domain), no https://
+ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
+# AUD tag of the Access application that protects /secure
+ACCESS_AUD = "REPLACE_WITH_ACCESS_APP_AUD"

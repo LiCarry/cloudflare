@@ -1,0 +1,15 @@
+{
+  "name": "ase-assessment-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker for the ASE take-home assessment: /secure identity page, /flags/:code from R2, /flags-d1/:code from D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}

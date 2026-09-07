@@ -1,0 +1,18 @@
+{
+  "name": "cloudflare-origin-server",
+  "version": "1.0.0",
+  "description": "Origin web server for the Cloudflare Associate Solutions Engineer take-home assessment, deployed on Render.com",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "postinstall": "node lib/install-cloudflared.js || true"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2"
+  }
+}
