@@ -1,129 +1,133 @@
-# Setup Guide — step by step
+# Setup Guide — step by step (as actually built)
 
-This guide walks through the entire assessment in order. Replace these placeholders as you go:
+This guide reflects the **real deployment**: origin on **Railway**, domain `clouddemo.cc.cd`
+(free subdomain from a DNS-hosting provider), Cloudflare Free plan throughout.
 
-| Placeholder | Meaning | Example |
-|---|---|---|
-| `<your-domain>` | Your domain added to Cloudflare | `example.com` |
-| `<app>.onrender.com` | Your Render service URL | `ase-demo.onrender.com` |
-| `<team-name>` | Zero Trust team domain | `my-team.cloudflareaccess.com` |
+Live endpoints:
 
-> **Free-tier note:** Render free web services sleep after ~15 min of inactivity and take ~50s
-> to cold-start. That is fine for the assessment — just warm it up before demoing.
+| What | URL |
+|---|---|
+| Application (proxied, WAF + rate limiting) | `https://www.clouddemo.cc.cd/` |
+| Origin via Cloudflare Tunnel | `https://tunnel.clouddemo.cc.cd/` |
+| Worker: identity page / flags | `https://www.clouddemo.cc.cd/secure` · `/flags/:CC` · `/flags-d1/:CC` |
 
 ---
 
 ## Part 1 — Application Services
 
-### 1.1 Deploy the origin on Render
+### 1.1 Deploy the origin on Railway
 
-1. Push this repository to GitHub (it must be public or connected to Render).
-2. On [Render](https://render.com): **New → Web Service → connect the repo**.
-3. Settings:
-   - **Runtime:** Node (auto-detected from `package.json` at the repo root)
-   - **Build command:** `npm install`
-   - **Start command:** `npm start`
-   - **Instance type:** Free
-4. Deploy, then smoke-test: `curl https://<app>.onrender.com/healthz` → `{"ok":true,...}`.
-   The homepage renders at `/`, the SQLi demo at `/search`, the rate-limit demo at `/login`.
+1. Push this repository to GitHub, then in [Railway](https://railway.app): **New Project →
+   Deploy from GitHub repo**.
+2. Service **Settings → Networking → Public Networking → Generate Domain**. Railway detects
+   the listening port automatically (it injects `PORT=8080`; the app logs
+   `[server] listening on 0.0.0.0:8080`). You get `https://<app>.up.railway.app`.
+3. Smoke test: `curl https://<app>.up.railway.app/healthz` → `{"ok":true,...}`.
 
-### 1.2 Put the domain behind Cloudflare (proxy ON)
+### 1.2 Put the domain behind Cloudflare
 
-1. Cloudflare dashboard → **Add a domain** (`<your-domain>`), Free plan. Change the
-   nameservers at your registrar as instructed, wait for *Active*.
-2. **DNS → Add record**: `CNAME` `www` (or `A @` on the apex) → `<app>.onrender.com`,
-   **Proxy status: Proxied (orange cloud)**.
-3. Verify traffic flows through Cloudflare:
-   ```bash
-   curl -sI https://<your-domain> | grep -iE "cf-ray|server"
-   # cf-ray: …            ← you are behind Cloudflare
-   # server: cloudflare
-   ```
+1. Cloudflare → **Add a domain** → `clouddemo.cc.cd` → Free plan.
+2. At the domain provider's panel, switch the **NS records** to the two Cloudflare
+   nameservers. Wait for the zone to become **Active**
+   (`dig NS clouddemo.cc.cd +short` shows `*.ns.cloudflare.com`).
 
-### 1.3 TLS between Cloudflare and the origin
+### 1.3 Publish the app on `www` — custom domain (the Error 1000 story)
 
-**SSL/TLS → Overview → set encryption mode to Full (strict).**
+A plain CNAME `www → <app>.up.railway.app` (orange cloud) works **only if** the platform
+domain is not itself behind Cloudflare. (On Render, `*.onrender.com` resolves into
+`cdn.cloudflare.net`, and proxying Cloudflare→Cloudflare fails with **Error 1000 — "DNS
+points to prohibited IP"**. Railway is fine, but it needs to *know* the hostname.)
 
-| Mode | Edge→Visitor | CF→Origin | Verdict |
-|---|---|---|---|
-| Off / Flexible | HTTPS | **plain HTTP** | vulnerable to interception/tampering on the last mile |
-| Full | HTTPS | HTTPS, cert **not validated** | MITM with any self-signed cert still possible |
-| **Full (strict)** | HTTPS | HTTPS, cert **validated** | ✅ recommended |
+Railway's supported way to serve a proxied custom domain:
 
-Render issues a valid certificate for `*.onrender.com`, so strict validation works with zero
-configuration. *Flexible* is the trap: the padlock in the browser means nothing if the last
-mile is plaintext — a packet capture between Cloudflare and the origin would show everything.
-(Demo: `curl -si http://<your-domain>` shows Cloudflare redirecting to HTTPS; with Flexible the
-origin request itself would ride plain HTTP.)
+1. Railway → Service **Settings → Networking → Custom Domain** → add `www.clouddemo.cc.cd`.
+2. Railway shows a **dedicated CNAME target** (e.g. `kay0oo0w.up.railway.app` — not the
+   public app domain!) and a **TXT verification record**.
+3. In Cloudflare DNS add:
+   - `CNAME` `www` → the Railway-provided target, **Proxied (orange cloud)**
+   - `TXT` `_railway-verify.www` → `railway-verify=<token from the Railway dialog>`
+4. Railway verifies within a minute or two and issues the TLS certificate. Because the TXT
+   record proves ownership, **the proxy can stay orange the whole time**.
 
-### 1.4 WAF — Managed Rulesets + SQL injection demo
-
-1. **Security → WAF → Managed rules**: enable the **Cloudflare Managed Ruleset** (on the Free
-   plan this is the *Cloudflare Free Managed Ruleset*; it is on by default — confirm it shows *Enabled*).
-2. Belt-and-braces for the demo, add a **custom rule** (Security → WAF → Custom rules):
-   - Expression (use the visual editor or "Edit expression"):
-     ```
-     (http.request.uri.query contains "union select") or (http.request.uri.query contains "or 1=1") or (http.request.uri.query contains "sleep(")
-     ```
-   - Action: **Block**.
-3. Demonstrate protection:
-   ```bash
-   # Blocked at the edge — never reaches the origin:
-   curl -i "https://<your-domain>/search?q=' OR 1=1 --"
-   #    HTTP/1.1 403 Forbidden
-   #    cf-mitigated-header: block        ← Cloudflare blocked it
-   curl -i "https://<your-domain>/search?q=' UNION SELECT id, username, password, email FROM users --"
-
-   # Benign query passes:
-   curl -i "https://<your-domain>/search?q=hoodie"     # HTTP 200
-   ```
-4. Contrast (what the origin would do without the WAF): open `/search` in a browser via the
-   tunnel hostname from Part 2 (or temporarily set `REQUIRE_CLOUDFLARE=false` and use the
-   onrender URL) — `q=' OR 1=1 --` dumps every row, the UNION payload leaks usernames and
-   passwords. That difference *is* the value of managed rulesets: CVE-grade protections with
-   zero code changes and rules maintained by Cloudflare researchers.
-
-### 1.5 Rate limiting
-
-1. **Security → WAF → Rate limiting rules → Create rule** (Free plan includes 1 rule):
-   - **If incoming requests match:** `http.request.uri.path eq "/api/login"`
-   - **With the same characteristics:** IP source address
-   - **When rate exceeds:** 10 requests / 10 seconds
-   - **Then take action:** Block · **For duration:** 1 minute
-2. Demo — either press the **"Fire 20 requests"** button on `https://<your-domain>/login`, or:
-   ```bash
-   for i in $(seq 1 20); do curl -s -o /dev/null -w "%{http_code} " -X POST https://<your-domain>/api/login; done
-   # 401 401 401 … 401 429 429 429     ← Cloudflare starts blocking the burst
-   ```
-   The first responses are JSON from the origin (`"Invalid credentials"`); after the threshold,
-   Cloudflare returns `429` and the origin sees nothing.
-
-**Use case / risk mitigated:** `/api/login` is a textbook credential-stuffing / brute-force
-target. The rule caps guess attempts per IP, protecting both the users' accounts and origin
-capacity, without touching application code.
-
-### 1.6 No bypassing Cloudflare
-
-Free Render has no host firewall, so enforcement lives in the app (`lib/cf-only.js`):
-with **`REQUIRE_CLOUDFLARE=true`** set on Render, every request whose actual network peer is
-not in [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) (and is not loopback — the
-tunnel) receives a `403` explanation page.
+Verify:
 
 ```bash
-# Direct hit on the origin — refused:
-curl -i https://<app>.onrender.com/           # → 403 "Direct origin access is blocked"
-
-# Same request through Cloudflare — fine:
-curl -i https://<your-domain>/                # → 200
+curl -sI https://www.clouddemo.cc.cd | grep -iE "HTTP|cf-ray|server"
+# HTTP/2 200 · cf-ray: … · server: cloudflare
 ```
 
-Why it matters: an attacker who discovers the origin IP can hit it directly and **skip the
-WAF, rate limiting and bot management entirely**. In production you would prefer
-network-level controls — firewall the origin to Cloudflare IPs only, **Authenticated Origin
-Pulls** (mTLS), or make the origin unreachable except via Cloudflare Tunnel (which is what
-Part 2 does for the protected path).
+### 1.4 TLS — encryption mode
 
-> After Part 2 you can flip this on for good: set `REQUIRE_CLOUDFLARE=true` in Render → Environment.
+**SSL/TLS → Overview → Full (strict)** (+ enable *Always Use HTTPS*). Railway serves a valid
+certificate for the custom domain, so strict validation works with zero configuration.
+*Flexible* would leave the Cloudflare→origin leg in plaintext; the browser padlock would be
+cosmetic. Compliance (PCI-DSS, HIPAA) assumes the whole path is encrypted.
+
+### 1.5 WAF — Managed Ruleset + SQL injection demo
+
+1. **Security → WAF → Managed rules**: confirm the *Cloudflare Free Managed Ruleset* is
+   **Enabled** (Free plan ships it on by default).
+2. Add a **custom rule** for a deterministic demo (Security → WAF → Custom rules → Create):
+   - Expression:
+     ```
+     http.request.uri.query contains "%20OR%201%3D1" or http.request.uri.query contains "%20UNION%20SELECT" or http.request.uri.query contains "sleep("
+     ```
+   - Action: **Block**.
+   - Note: the ruleset language matches the **raw (still URL-encoded) query string**, and on
+     this plan `lower()`/`url.decode()` are not available in the editor — so the rule matches
+     the encoded shapes the payloads actually travel in (`' OR 1=1 --` → `q=%27%20OR%201%3D1%20--`).
+3. Demonstrate:
+   ```bash
+   curl -sI "https://www.clouddemo.cc.cd/search?q=%27%20OR%201%3D1%20--"     # → 403 (edge)
+   curl -sI "https://www.clouddemo.cc.cd/search?q=%27%20UNION%20SELECT%20id%2C%20username%2C%20password%2C%20email%20FROM%20users%20--"   # → 403
+   curl -s -o /dev/null -w "%{http_code}\n" "https://www.clouddemo.cc.cd/search?q=hoodie"   # → 200
+   ```
+   Via the tunnel hostname (or with the WAF rule disabled) the same payload executes on the
+   origin and dumps every row — the before/after contrast is the demo. Security → Events
+   shows the blocked requests with the matched rule.
+
+### 1.6 Rate limiting
+
+**Security → WAF → Rate limiting rules → Create rule** (Free plan includes one):
+
+- Match: `URI Path equals /api/login`
+- With the same characteristics: **IP source address**
+- When rate exceeds **10 requests in 10 seconds** → **Block for 1 minute**
+
+Demo — the "Fire 20 requests" button on `https://www.clouddemo.cc.cd/login`, or:
+
+```bash
+for i in $(seq 1 20); do curl -s -o /dev/null -w "%{http_code} " -X POST https://www.clouddemo.cc.cd/api/login; done
+# 401 401 401 401 401 401 401 401 401 429 429 429 429 429 429 429 401 429 429 429
+```
+
+The first nine responses are the origin's JSON 401; after the threshold Cloudflare answers
+429 and the origin sees nothing. (The lone 401 near the end is the sliding window expiring —
+a nice detail to point out in the demo.)
+
+### 1.7 No bypassing Cloudflare — IP check + shared secret
+
+Two layers in `lib/cf-only.js` (`REQUIRE_CLOUDFLARE=true` on Railway):
+
+1. **Peer-IP check**: walk `X-Forwarded-For` from the right (the unforgeable side) and allow
+   only Cloudflare IP ranges or loopback (the tunnel).
+2. **Shared-secret header** — necessary on Railway: its edge normalises `X-Forwarded-For` to
+   the *original visitor IP*, so the Cloudflare edge IP never appears and rule 1 alone would
+   block legitimate proxied traffic. Fix:
+   - Cloudflare → **Rules → Transform Rules → Modify Request Header** → rule on all incoming
+     requests: **Set static** header `X-Origin-Secret` = a long random value. (Cloudflare
+     force-overwrites the header, and reserves the `x-cf-` prefix for itself — use another name.)
+   - Railway variable `CF_SHARED_SECRET` = the same value.
+   - The middleware then accepts requests carrying the matching secret; a direct visitor
+     cannot know it.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://<app>.up.railway.app/    # → 403 (direct)
+curl -s -o /dev/null -w "%{http_code}\n" https://www.clouddemo.cc.cd/     # → 200 (via CF)
+```
+
+In production, prefer network-level controls: origin firewall allowlisting Cloudflare IPs,
+Authenticated Origin Pulls (mTLS), or tunnel-only reachability.
 
 ---
 
@@ -131,129 +135,83 @@ Part 2 does for the protected path).
 
 ### 2.1 Cloudflare Tunnel on the origin
 
-1. Cloudflare dashboard → **Zero Trust** (accept the free plan, pick a team domain →
-   `<team-name>.cloudflareaccess.com`).
-2. **Networks → Tunnels → Create a tunnel → Cloudflared connector**, name it e.g. `origin-tunnel`.
-3. Copy the **token** shown in the install command (the long string after `--token`).
-4. On Render → Environment: add **`TUNNEL_TOKEN`** = that token. Save (this redeploys).
-   The app downloads/starts `cloudflared` automatically on boot
-   (`lib/tunnel.js`); logs show `[cloudflared]` lines and the connector turns **Healthy**
-   in the Zero Trust dashboard.
-5. **Public Hostname** tab (still on the tunnel config): add
-   `tunnel.<your-domain>` → Service **HTTP** `localhost:10000`
-   (check the exact port in Render logs: `[server] listening on 0.0.0.0:PORT`).
-   Cloudflare creates the DNS record automatically (proxied).
-6. Verify: `https://tunnel.<your-domain>/` shows the same app — now served through an
-   outbound-only tunnel; no inbound port is exposed on Render.
+1. Zero Trust → **Networks → Tunnels → Create a tunnel → Cloudflared**, name `origin-tunnel`;
+   copy the **token**.
+2. Railway → Variables → `TUNNEL_TOKEN` = token (redeploys automatically). The app downloads
+   `cloudflared` at install time and runs it as a supervised child process (`lib/tunnel.js`);
+   logs show `[cloudflared] … Registered tunnel connection` ×4 and the dashboard shows
+   **HEALTHY**.
+3. Tunnel → **Public Hostname** → Add: subdomain `tunnel`, domain `clouddemo.cc.cd`,
+   service **HTTP** `localhost:8080` — the port must match the app's log line, *not* 3000.
+4. Verify: `curl -s -o /dev/null -w "%{http_code}\n" https://tunnel.clouddemo.cc.cd/` → 200.
 
-### 2.2 SSO Identity Provider
+### 2.2 SSO IdP
 
-**Zero Trust → Settings → Authentication → Login methods → Add one**:
-
-- **One-time PIN** — zero configuration (email + PIN code). Good enough for the assessment.
-- *Optional:* **Google** or **GitHub** OAuth — create an OAuth app at the provider, paste
-  Client ID/Secret into Cloudflare, and set the redirect URL Cloudflare shows.
+Zero Trust → **Settings → Authentication → Login methods → Add → One-time PIN** (email +
+code, zero external dependencies; Google/GitHub OAuth are drop-in alternatives).
 
 ### 2.3 Lock down `/secure`
 
-**Zero Trust → Access → Applications → Add an application → Self-hosted**:
+Two self-hosted Access applications with the same policy — one per hostname:
 
-1. **Application configuration:**
-   - Application name: `secure-origin`
-   - Session Duration: e.g. 24 hours
-   - **Application domain:** `tunnel.<your-domain>` — path: `secure`
-2. **Add policies:** one *Include* rule:
-   - Selector **Emails** → your email address
-   - *also* Selector **Email domain** → `cloudflare.com`
-   (within one Include rule, selectors are OR-ed: you **or** anyone with an
-   @cloudflare.com address)
-3. Save.
+1. `tunnel.clouddemo.cc.cd/secure` (protects the origin page)
+2. `www.clouddemo.cc.cd/secure` (protects the Worker route from Part 3)
 
-Demo: open `https://tunnel.<your-domain>/secure` in an incognito window → Cloudflare asks you
-to authenticate (OTP to your email) → afterwards the origin page greets you with
-`cf-access-authenticated-user-email: <you>`. Uninvited visitors never reach the origin at all.
-Create a **second identical Access application** for `<your-domain>` path `secure` — that one
-guards the Worker route in Part 3.
+Policy (one Include rule, selectors are OR-ed): **Emails = your address** OR
+**Email domain = `cloudflare.com`**.
+
+Demo: incognito → `https://tunnel.clouddemo.cc.cd/secure` → Access login (OTP) → the origin
+page greets you via `cf-access-authenticated-user-email`. Uninvited visitors get the Access
+login page and never reach the origin. Copy the **AUD tag** of the `www` application for Part 3.
 
 ---
 
 ## Part 3 — Developer Platform (Worker + R2 + D1)
 
-All commands run from `worker/` unless noted. Prereqs: `npm install` inside `worker/`,
-then `npx wrangler login`.
-
-### 3.1 Create the R2 bucket and upload flags (private)
+From `worker/`, after `npm install` and `npx wrangler login`:
 
 ```bash
+# 1. Private R2 bucket (activate R2 once in the dashboard first)
+npx wrangler r2 bucket create ase-flags
+cd .. && bash scripts/download-flags.sh && node scripts/upload-r2.js   # 257 flags → flags/<cc>.svg
 cd worker
-npx wrangler r2 bucket create ase-flags        # name must match wrangler.toml
-cd ..
-bash scripts/download-flags.sh                 # fetches flag SVGs into flag-assets/
-node scripts/upload-r2.js                      # uploads 257 flags as flags/<cc>.svg
-```
 
-The bucket has **no public access** — no `r2.dev` subdomain enabled. Objects are readable
-only through the Worker's R2 binding. Verify privacy: any direct object URL returns
-`Unauthorized`; `GET /flags/cn` through the Worker works.
-
-### 3.2 Create the D1 database and load flags
-
-```bash
-cd worker
+# 2. D1 database — paste database_id into wrangler.toml
 npx wrangler d1 create ase-flags-db
-# 📔 copy "database_id" into wrangler.toml → [[d1_databases]]
+npx wrangler d1 execute FLAGS_DB --file ../scripts/schema.sql --remote
+cd .. && node scripts/make-d1-seed.js && bash scripts/load-d1.sh       # → Rows: 257 (expected 257)
+cd worker
 
-npx wrangler d1 execute FLAGS_DB --file ../scripts/schema.sql --remote   # create table
-cd ..
-node scripts/make-d1-seed.js                   # generates scripts/d1-seed/*.sql chunks
-bash scripts/load-d1.sh                        # loads all chunks into remote D1 + verifies 257 rows
+# 3. Access identity in wrangler.toml [vars]:
+#    ACCESS_TEAM_DOMAIN = "<team>.cloudflareaccess.com"   (Zero Trust → Settings → Custom Pages)
+#    ACCESS_AUD         = "<AUD of the www /secure Access app>"
+
+# 4. Deploy with routes (already in wrangler.toml)
+npx wrangler deploy
 ```
 
-(The seed is chunked and oversized flags are assembled with `UPDATE … ||` appends because
-D1 caps single SQL statements at 100KB — Serbia's coat of arms alone is 181KB.)
+JWT verification notes (learned the hard way): the Access JWT this team issues is **RS256**
+(support both it and ES256), and Workers' WebCrypto requires the **hash to be stated
+explicitly** when importing/verifying RSASSA-PKCS1-v1_5 keys — otherwise `TypeError: Missing
+field "hash" in "algorithm"`.
 
-### 3.3 Configure Access identity + deploy the Worker
-
-1. In the Access application protecting `<your-domain>/secure` (created in 2.3), copy the
-   **AUD tag** (Application Configuration → Advanced).
-2. Edit `worker/wrangler.toml`:
-   - `ACCESS_TEAM_DOMAIN = "<team-name>.cloudflareaccess.com"`
-   - `ACCESS_AUD = "<aud-tag>"`
-3. Deploy and route it on your domain:
-   ```bash
-   cd worker && npx wrangler deploy
-   ```
-   Then dashboard → **Workers Routes** for `<your-domain>` → add route
-   `*<your-domain>/secure*` (and `/flags/*`, `/flags-d1/*`) → service
-   `ase-assessment-worker`. Or put the `routes` array in `wrangler.toml` (commented there).
-   > Without a custom domain you can also enable **Access for the Worker by name**
-   > (Workers & Pages → the worker → Settings → Cloudflare Access) and use the
-   > `*.workers.dev` URL — the AUD comes from that Access app.
-
-### 3.4 End-to-end test
-
-1. Open `https://<your-domain>/secure` → redirected to the Access login (OTP) →
-   the page shows exactly:
-   > **you@example.com authenticated at 2026-09-07T12:34:56.789Z from CN**
-   with **CN** rendered as a link (Worker validates the ES256 Access JWT against your team's
-   public keys; country comes from `request.cf.country`).
-2. Click the country → `/flags/CN` serves the flag SVG from the **private R2 bucket**
-   (`Content-Type: image/svg+xml`).
-3. `/flags-d1/CN` serves the same flag from **D1** (response header `x-flag-source` tells
-   you which store served it).
+End-to-end test: incognito → `https://www.clouddemo.cc.cd/secure` → OTP login → the page
+renders `<email> authenticated at <timestamp> from <COUNTRY>` with the country linking to
+`/flags/<COUNTRY>` (R2) and `/flags-d1/<COUNTRY>` (D1). Response header `x-flag-source`
+tells you which store served the image.
 
 ---
 
-## Troubleshooting
+## Troubleshooting (all of these were actually hit)
 
-| Symptom | Fix |
+| Symptom | Cause / Fix |
 |---|---|
-| Render deploys but URL gives 502 | app must bind `0.0.0.0:$PORT` (it does) — check Render logs for the port |
-| Everything 403 after setting `REQUIRE_CLOUDFLARE=true` | you are testing the onrender URL directly — use the proxied domain; check `X-Forwarded-For` handling |
-| Tunnel connector not healthy | `TUNNEL_TOKEN` set on Render? Check logs for `[cloudflared]` lines; re-copy the token |
-| Tunnel returns 502 Bad Gateway | public hostname service port ≠ app port — match `localhost:<PORT>` to Render logs |
-| `/secure` shows the unauthenticated card | you're not on the Access-protected hostname, or the Access app path doesn't cover `/secure` |
-| Worker says `audience mismatch` | AUD tag in `wrangler.toml` ≠ the Access app's AUD — re-copy |
-| `/flags/xx` 404 | run `scripts/upload-r2.js`; check bucket name matches `wrangler.toml` |
-| `/flags-d1/xx` 404 | run `scripts/load-d1.sh`; check `database_id` matches |
-| Rate-limit rule never trips | rules match on the exact path (`/api/login`) and count per IP — curl from one machine |
+| **Error 1000 — DNS points to prohibited IP** | Proxied CNAME ultimately resolves into Cloudflare's own network (e.g. Render's `*.onrender.com` → `cdn.cloudflare.net`). Use Railway's Custom Domain flow (dedicated CNAME + TXT verification), or a tunnel. |
+| `"Application not found"` JSON 404 from `*.up.railway.app` | Railway doesn't know your hostname yet — register it as a Custom Domain. |
+| WAF rule deploys but never matches | The ruleset language matches the **raw encoded** query string; `lower()`/`url.decode()` may not be available. Match encoded fragments (`%20OR%201%3D1`). |
+| Everything 403 after `REQUIRE_CLOUDFLARE=true` | On Railway, XFF shows the visitor IP, not the Cloudflare edge — configure the shared-secret Transform Rule + `CF_SHARED_SECRET`. |
+| Tunnel 502 Bad Gateway | Public hostname targets the wrong port — match `localhost:<PORT>` to the app's log line (8080 on Railway, not 3000). |
+| `/secure` shows "unsupported alg RS256" | Worker only accepted ES256 — support both algorithms. |
+| Error 1101 / `Missing field "hash" in "algorithm"` | Workers' WebCrypto needs `{name:"RSASSA-PKCS1-v1_5", hash:"SHA-256"}` on import/verify. |
+| `SQLITE_TOOBIG` loading D1 | D1 caps statements ~100KB; Serbia's flag SVG alone is 181KB — the seed script chunks and assembles rows via `UPDATE … content || '…'`. |
+| R2 uploads fail sporadically | Transient API errors under concurrency — `scripts/upload-r2.js` retries each object 3×; re-run, it's idempotent. |
