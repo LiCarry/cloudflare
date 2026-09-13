@@ -63,7 +63,9 @@ async function verifyAccessJwt(jwt, env) {
   } catch {
     return { ok: false, reason: "malformed token" };
   }
-  if (header.alg !== "ES256") return { ok: false, reason: `unsupported alg ${header.alg}` };
+  if (header.alg !== "ES256" && header.alg !== "RS256") {
+    return { ok: false, reason: `unsupported alg ${header.alg}` };
+  }
 
   const team = env.ACCESS_TEAM_DOMAIN;
   const aud = env.ACCESS_AUD;
@@ -83,16 +85,23 @@ async function verifyAccessJwt(jwt, env) {
   const jwk = keys.find((k) => k.kid === header.kid);
   if (!jwk) return { ok: false, reason: "unknown signing key (kid)" };
 
-  const cryptoKey = await crypto.subtle.importKey(
-    "jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]
-  );
-  // JOSE ES256 signatures are raw r||s — exactly what WebCrypto expects.
-  const valid = await crypto.subtle.verify(
-    { name: "ECDSA", hash: "SHA-256" },
-    cryptoKey,
-    b64urlToBytes(s64),
-    textEncoder.encode(`${h64}.${p64}`)
-  );
+  const data = textEncoder.encode(`${h64}.${p64}`);
+  const sig = b64urlToBytes(s64);
+  let valid;
+  if (header.alg === "ES256") {
+    // JOSE ES256 signatures are raw r||s — exactly what WebCrypto expects.
+    const cryptoKey = await crypto.subtle.importKey(
+      "jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]
+    );
+    valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, cryptoKey, sig, data);
+  } else {
+    // RS256: RSA JWK + RSASSA-PKCS1-v1_5 with SHA-256
+    if (jwk.kty !== "RSA") return { ok: false, reason: "signing key is not RSA" };
+    const cryptoKey = await crypto.subtle.importKey(
+      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5" }, false, ["verify"]
+    );
+    valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, sig, data);
+  }
   if (!valid) return { ok: false, reason: "signature verification failed" };
 
   return { ok: true, email: payload.email, payload };
