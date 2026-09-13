@@ -88,19 +88,23 @@ async function verifyAccessJwt(jwt, env) {
   const data = textEncoder.encode(`${h64}.${p64}`);
   const sig = b64urlToBytes(s64);
   let valid;
-  if (header.alg === "ES256") {
-    // JOSE ES256 signatures are raw r||s — exactly what WebCrypto expects.
-    const cryptoKey = await crypto.subtle.importKey(
-      "jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]
-    );
-    valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, cryptoKey, sig, data);
-  } else {
-    // RS256: RSA JWK + RSASSA-PKCS1-v1_5 with SHA-256
-    if (jwk.kty !== "RSA") return { ok: false, reason: "signing key is not RSA" };
-    const cryptoKey = await crypto.subtle.importKey(
-      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5" }, false, ["verify"]
-    );
-    valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, sig, data);
+  try {
+    if (header.alg === "ES256") {
+      // JOSE ES256 signatures are raw r||s — exactly what WebCrypto expects.
+      const cryptoKey = await crypto.subtle.importKey(
+        "jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]
+      );
+      valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, cryptoKey, sig, data);
+    } else {
+      // RS256: RSA JWK + RSASSA-PKCS1-v1_5 with SHA-256
+      // (Workers' WebCrypto requires the hash on importKey.)
+      const cryptoKey = await crypto.subtle.importKey(
+        "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]
+      );
+      valid = await crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, cryptoKey, sig, data);
+    }
+  } catch (err) {
+    return { ok: false, reason: `crypto error: ${err.name} ${err.message} | jwk.kty=${jwk.kty} kids=${keys.map((k) => k.kty + ":" + k.kid).join(",")}` };
   }
   if (!valid) return { ok: false, reason: "signature verification failed" };
 
