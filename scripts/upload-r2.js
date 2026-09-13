@@ -58,15 +58,19 @@ async function main() {
   async function worker() {
     while (queue.length) {
       const file = queue.shift();
-      const ok = await runWrangler([
-        "r2", "object", "put",
-        `${bucket}/flags/${file}`,
-        "--file", path.join(ASSETS, file),
-        "--content-type", "image/svg+xml",
-      ]);
+      let ok = false;
+      for (let attempt = 1; attempt <= 3 && !ok; attempt++) {
+        ok = await runWrangler([
+          "r2", "object", "put",
+          `${bucket}/flags/${file}`,
+          "--file", path.join(ASSETS, file),
+          "--content-type", "image/svg+xml",
+        ]);
+        if (!ok) await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
       if (!ok) {
         failed++;
-        console.error(`   ✗ ${file}`);
+        console.error(`   ✗ ${file} (3 attempts)`);
       }
       done++;
       if (done % 25 === 0 || done === files.length) console.log(`   ${done}/${files.length}`);
