@@ -25,6 +25,13 @@ main = "src/index.js"
 compatibility_date = "2026-08-01"
 workers_dev = true
 
+routes = [
+  { pattern = "www.clouddemo.cc.cd/secure*", zone_name = "clouddemo.cc.cd" },
+  { pattern = "www.clouddemo.cc.cd/flags/*", zone_name = "clouddemo.cc.cd" },
+  { pattern = "www.clouddemo.cc.cd/flags-d1/*", zone_name = "clouddemo.cc.cd" },
+]
+
+
 [[r2_buckets]]
 binding = "FLAGS"
 bucket_name = "ase-flags"
@@ -36,6 +43,6 @@ database_id = "e54d0c66-11c3-4941-999b-f2b9c0fbaf5a"
 
 [vars]
 # Zero Trust team domain (Settings > Custom Pages > Team Domain), no https://
-ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
+ACCESS_TEAM_DOMAIN = "green-darkness-9d5e.cloudflareaccess.com"
 # AUD tag of the Access application that protects /secure
-ACCESS_AUD = "REPLACE_WITH_ACCESS_APP_AUD"
+ACCESS_AUD = "47ae58664cfcd84dd9798a2ebe5031a3eaf7710a128abd4bd95ff31488838ee1"

@@ -199,7 +199,18 @@ async function handleSecure(request, env) {
 
 async function handleFlagR2(countryCode, env) {
   const code = countryCode.toLowerCase();
-  const object = await env.FLAGS.get(`flags/${code}.svg`);
+  let object = null;
+  let r2Error = null;
+  try {
+    object = await env.FLAGS.get(`flags/${code}.svg`);
+  } catch (err) {
+    r2Error = `${err.name}: ${err.message}`;
+  }
+  if (r2Error) {
+    return new Response(`R2 error: ${r2Error}\nbinding=${typeof env.FLAGS}`, {
+      status: 500, headers: { "content-type": "text/plain" },
+    });
+  }
   if (!object) {
     return page(
       "Flag not found",
