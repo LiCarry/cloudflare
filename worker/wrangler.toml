@@ -32,7 +32,7 @@ bucket_name = "ase-flags"
 [[d1_databases]]
 binding = "FLAGS_DB"
 database_name = "ase-flags-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "e54d0c66-11c3-4941-999b-f2b9c0fbaf5a"
 
 [vars]
 # Zero Trust team domain (Settings > Custom Pages > Team Domain), no https://
