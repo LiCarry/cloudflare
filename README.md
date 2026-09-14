@@ -10,8 +10,6 @@ Solution for the **Associate Solutions Engineer** take-home assessment. Everythi
 
 **Live**: `https://www.clouddemo.cc.cd` (app) · `/secure` (Worker) · `https://tunnel.clouddemo.cc.cd` (Tunnel)
 
-**Docs**: step-by-step guide [`docs/SETUP.md`](docs/SETUP.md) · written report [`docs/REPORT.md`](docs/REPORT.md) · presentation [`docs/slides.html`](docs/slides.html) (or [`docs/slides.pdf`](docs/slides.pdf))
-
 ## Architecture
 
 ```
@@ -57,11 +55,6 @@ Solution for the **Associate Solutions Engineer** take-home assessment. Everythi
 │   ├── schema.sql          # D1 table
 │   ├── make-d1-seed.js     # generate chunked seed SQL (handles >100KB flags)
 │   └── load-d1.sh          # load seed into D1 with retries + verify
-└── docs/
-    ├── SETUP.md            # click-by-click setup guide + troubleshooting
-    ├── REPORT.md           # written report (deliverable #2)
-    ├── slides.html / .md / .pdf   # presentation deck
-    └── ASE-Report.pdf      # rendered report
 ```
 
 ## Quick start (local)
